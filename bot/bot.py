@@ -187,6 +187,10 @@ class Bot(commands.Bot):
                 logger.error(f"Webhook error: {e}")
                 raise HTTPException(status_code=400, detail=str(e))
 
+        @self.web_app.get("/")
+        async def health_check():
+            return {"status": "ok"}
+
     async def on_ready(self) -> None:
         """Called when the bot is ready."""
         logger.info(f"Bot logged in as {self.user} (ID: {self.user.id})")
