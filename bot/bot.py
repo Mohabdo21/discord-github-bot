@@ -2,28 +2,37 @@ import hashlib
 import hmac
 import logging
 import os
+from typing import Any, Dict
 
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 
+from bot.discord_client import get_discord_client
+
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 class Bot(commands.Bot):
-    def __init__(self) -> None:
-        intents = discord.Intents.default()
-        intents.message_content = True
-
-        super().__init__(
-            command_prefix="?",
-            intents=intents,
-            activity=discord.Game(name="Type ?help"),
-            case_insensitive=True,
-        )
+    def __init__(self, initialize_discord=True) -> None:
         self.web_app = FastAPI()
         self.setup_webhook_routes()
+
+        if initialize_discord:
+            intents = discord.Intents.default()
+            intents.message_content = True
+
+            super().__init__(
+                command_prefix="?",
+                intents=intents,
+                activity=discord.Game(name="Type ?help"),
+                case_insensitive=True,
+            )
+        else:
+            # For web-only mode, we're not initializing the commands.Bot
+            pass
 
     async def setup_hook(self) -> None:
         """Load extensions on startup."""
@@ -39,42 +48,30 @@ class Bot(commands.Bot):
         expected = hmac.new(secret, payload, hashlib.sha256).hexdigest()
         return hmac.compare_digest(f"sha256={expected}", signature)
 
-    async def send_github_notification(self, channel_id: int, payload: dict):
-        try:
-            channel = self.get_channel(channel_id)
-            if not channel:
-                print(f"Channel {channel_id} not found")
-                return
+    def create_github_embed(
+        self, payload: Dict[Any, Any], event_type: str
+    ) -> discord.Embed:
+        """Create a Discord embed for a GitHub webhook event."""
+        repo = payload["repository"]
+        sender = payload["sender"]
 
-            event_type = payload.get(
-                "X-GitHub-Event", "push"
-            )  # Default to push if not specified
-            repo = payload["repository"]
-            sender = payload["sender"]
+        # Base embed setup
+        embed = discord.Embed(color=0x28A745)
+        embed.set_author(name=sender["login"], icon_url=sender["avatar_url"])
+        embed.set_footer(
+            text=repo["full_name"],
+            icon_url="https://github.githubassets.com/favicons/favicon.png",
+        )
 
-            # Base embed setup
-            embed = discord.Embed(color=0x28A745)
-            embed.set_author(name=sender["login"], icon_url=sender["avatar_url"])
-            embed.set_footer(
-                text=repo["full_name"],
-                icon_url="https://github.githubassets.com/favicons/favicon.png",
-            )
+        if event_type == "push":
+            self._handle_push_event(embed, payload, repo)
+        elif event_type == "pull_request":
+            self._handle_pull_request(embed, payload, repo)
+        # Add more event types as needed
 
-            if event_type == "push":
-                await self._handle_push_event(embed, payload, repo)
-            elif event_type == "pull_request":
-                await self._handle_pull_request(embed, payload, repo)
-            # Add more event types as needed
+        return embed
 
-            await channel.send(embed=embed)
-
-        except Exception as e:
-            print(f"Error sending notification: {e}")
-            # Consider sending a basic error notification to Discord
-            if channel:
-                await channel.send(f"⚠️ Failed to process GitHub webhook: {str(e)}")
-
-    async def _handle_push_event(self, embed: discord.Embed, payload: dict, repo: dict):
+    def _handle_push_event(self, embed: discord.Embed, payload: dict, repo: dict):
         """Handle GitHub push events with detailed information."""
         commits = payload["commits"]
         branch = payload["ref"].split("/")[-1]
@@ -122,9 +119,7 @@ class Bot(commands.Bot):
                 inline=True,
             )
 
-    async def _handle_pull_request(
-        self, embed: discord.Embed, payload: dict, repo: dict
-    ):
+    def _handle_pull_request(self, embed: discord.Embed, payload: dict, repo: dict):
         """Handle GitHub pull request events."""
         pr = payload["pull_request"]
         action = payload["action"]  # opened, closed, merged, etc.
@@ -171,20 +166,31 @@ class Bot(commands.Bot):
                 payload = await request.json()
                 channel_id = int(os.getenv("GITHUB_NOTIFICATION_CHANNEL"))
 
-                self.loop.create_task(
-                    self.send_github_notification(channel_id, payload)
-                )
+                # Get the event type from headers
+                event_type = request.headers.get("X-GitHub-Event", "push")
+                payload["X-GitHub-Event"] = event_type
+
+                # Create the embed
+                embed = self.create_github_embed(payload, event_type)
+
+                # Import here to avoid circular imports
+                from bot.discord_client import send_notification
+
+                # Use the shared client to send the notification
+                success = send_notification(channel_id, embed)
+                if not success:
+                    logger.error("Failed to send webhook notification to Discord")
 
                 return {"status": "success"}
 
             except Exception as e:
-                print(f"Webhook error: {e}")
+                logger.error(f"Webhook error: {e}")
                 raise HTTPException(status_code=400, detail=str(e))
 
     async def on_ready(self) -> None:
         """Called when the bot is ready."""
-        logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
-        print(f"Logged in as {self.user} (ID: {self.user.id})")
+        logger.info(f"Bot logged in as {self.user} (ID: {self.user.id})")
+        print(f"Bot logged in as {self.user} (ID: {self.user.id})")
 
     async def on_command_error(
         self, ctx: commands.Context, error: commands.CommandError
@@ -195,5 +201,5 @@ class Bot(commands.Bot):
         elif isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f"Missing required argument: {error.param.name}")
         else:
-            logging.error(f"Error in command {ctx.command}: {error}")
+            logger.error(f"Error in command {ctx.command}: {error}")
             await ctx.send("An error occurred while executing that command.")

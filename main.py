@@ -1,8 +1,5 @@
 import logging
 import os
-import threading
-
-import uvicorn
 
 from bot.bot import Bot
 
@@ -14,17 +11,9 @@ logging.basicConfig(
 )
 
 
-def run_fastapi(bot: Bot):
-    uvicorn.run(bot.web_app, host="0.0.0.0", port=8000)
-
-
 def main():
-    bot = Bot()
-
-    # Run FastAPI in a separate thread
-    fastapi_thread = threading.Thread(target=run_fastapi, args=(bot,))
-    fastapi_thread.start()
-
+    # Create a Discord bot instance (with Discord initialized)
+    bot = Bot(initialize_discord=True)
     bot.run(os.getenv("TOKEN"))
 
 

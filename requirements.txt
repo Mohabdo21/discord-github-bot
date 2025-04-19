@@ -12,9 +12,11 @@ discord.py==2.5.2
 dotenv==0.9.9
 fastapi==0.115.12
 frozenlist==1.6.0
+gunicorn==23.0.0
 h11==0.14.0
 idna==3.10
 multidict==6.4.3
+packaging==25.0
 propcache==0.3.1
 pydantic==2.11.3
 pydantic_core==2.33.1
